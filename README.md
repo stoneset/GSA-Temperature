@@ -1,4 +1,4 @@
-# Citroën GSA Temperature Monitoring System
+# Citroën GSA Temperature monitoring system
 
 ### Simple Temperature Sensor System for Citroën GSA Based on DS18B20
 
@@ -10,39 +10,25 @@ That's why I developed a small temperature monitoring system to ensure a safe an
 
 The system includes sensors placed outdoors, indoors, and on the engine to track temperatures while driving.
 
-A must-have if this classic is your daily ride! 🛣️
+A must-have if this classic is your daily ride!
 
 ---
 
-## How to Use It:
-
-1️⃣ **Components Required:**
+**BOM:**
    - DS18B20 temperature sensors
    - DS1307 real-time clock module
    - SH1106 OLED display (128x64px)
 
-2️⃣ **Installation:**
-   - Mount the sensors and screen on the Citroën GSA dashboard.
 
-3️⃣ **Configuration:**
+**Configuration:**
    - Assign each sensor to its correct location (outdoor, indoor, engine).
    - Set the time on the DS1307 module using the example "SetTime" script from the RTC library.
 
-4️⃣ **Start the System:**
-   - Crank up the engine... let it warm up... and voilà! 🌡️🔥
-
 ---
 
-### TODO:
-✅ Finish developing the DS1307 clock module.
-
----
-
-<img src="https://github.com/user-attachments/assets/140ef6bf-781a-4ecd-82fb-425c16a6cc0e" alt="alt" width="400">
-
-### Splash Screen :
-<img src="https://github.com/user-attachments/assets/658767af-6571-4778-9c2d-8420577c02db" alt="alt" width="300">
-
----
-
-(c) @StoneSet - [http://stoneset.fr/](http://stoneset.fr/) (2023)
+<table>
+  <tr>
+    <td><img src="https://github.com/user-attachments/assets/140ef6bf-781a-4ecd-82fb-425c16a6cc0e" width="400"></td>
+    <td><img src="https://github.com/user-attachments/assets/658767af-6571-4778-9c2d-8420577c02db" width="300"></td>
+  </tr>
+</table>

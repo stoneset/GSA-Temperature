@@ -3,7 +3,7 @@
  *
  * Matériel
  *   - Arduino Uno / Nano (ATmega328P)
- *   - 3 sondes DS18B20 sur D4 (résistance de tirage 4,7 kOhm vers 5 V)
+ *   - 3 sondes DS18B20 sur D7 (résistance de tirage 4,7 kOhm vers 5 V)
  *   - RTC DS3231 en I2C (adresse 0x68)
  *   - écran OLED SH1106 128x64 en I2C (adresse 0x3C)
  *   - 2 boutons poussoirs : D2 vers GND (heures), D3 vers GND (minutes),
@@ -36,30 +36,32 @@
 
 // ============================================================ configuration
 
-#define RTC_EST_DS3231        1   // 0 tant que l'ancien DS1307 est monté
+#define RTC_EST_DS3231        1   // 1 avec un DS3231, 0 avec un DS1307
 #define OPTION_TENSION        1   // 0 tant que le pont diviseur n'est pas câblé (A0 en l'air = fausses alertes)
 #define OPTION_PRESSION_HUILE 0   // 1 une fois le capteur de pression monté
 
-const uint8_t PIN_ONEWIRE    = 4;
+const uint8_t PIN_ONEWIRE    = 7;
 const uint8_t PIN_BOUTON_HEURES  = 2;
 const uint8_t PIN_BOUTON_MINUTES = 3;
 const uint8_t PIN_OLED_RESET = 6;    // comme l'ancien code ; U8X8_PIN_NONE si RST n'est pas câblé
 const uint8_t PIN_TENSION    = A0;
 const uint8_t PIN_PRESSION   = A1;
 
-// Adresses des sondes
-DeviceAddress SONDE_MOTEUR = { 0x28, 0xE4, 0x7A, 0x57, 0x04, 0xD6, 0x3C, 0x14 };
-DeviceAddress SONDE_EXT    = { 0x28, 0x2B, 0x3F, 0x57, 0x04, 0xA0, 0x3C, 0x88 };
+// Adresses des sondes : les relever avec le programme IDENTIFIER_SONDES (chauffer une sonde à la fois).
+// Une sonde absente ou à l'adresse inconnue s'affiche "--" ; les autres ne sont pas décalées.
+DeviceAddress SONDE_MOTEUR = { 0x28, 0x2B, 0x3F, 0x57, 0x04, 0xA0, 0x3C, 0x88 };
+DeviceAddress SONDE_EXT    = { 0x28, 0xE4, 0x7A, 0x57, 0x04, 0xD6, 0x3C, 0x14 };
 DeviceAddress SONDE_INT    = { 0x28, 0x1C, 0x27, 0x57, 0x04, 0xE1, 0x3D, 0xA3 };
 
 const int16_t SEUIL_CACHE_CALANDRE = 6;     // °C extérieur au démarrage
-const int16_t SEUIL_ALERTE_MOTEUR  = 110;   // °C
+const int16_t SEUIL_ALERTE_MOTEUR  = 110;   // °C, à ajuster selon l'emplacement de la sonde (DS18B20 : 125 °C max)
 const uint8_t RESOLUTION_SONDES    = 10;    // 0,25 °C, conversion en 187,5 ms
 
-// Tension : tension batterie qui donnerait 5 V sur A0, en millivolts.
-// Théorique : 5000 x (33 + 10) / 10 = 21500. Étalonnage au multimètre :
-// nouvelle valeur = valeur actuelle x tension mesurée au multimètre / tension affichée
-const uint32_t TENSION_PLEINE_ECHELLE_MV = 21500;
+// Tension : la mesure est comparée à la référence interne de 1,1 V de l'ATmega328P,
+// elle ne dépend donc pas du 5 V réel (USB ou abaisseur).
+// Théorique : 1100 mV x (33 + 10) / 10 = 4730. La référence interne varie de 1,0 à 1,2 V selon la puce,
+// étalonner une fois au multimètre : nouvelle valeur = valeur actuelle x tension multimètre / tension affichée
+const uint32_t CONSTANTE_TENSION_MV = 4570;   // étalonné sur ma Nano (théorique : 4730)
 const int16_t  SEUIL_TENSION_HAUTE_DV    = 148;   // 14,8 V : surcharge (régulateur)
 const int16_t  SEUIL_TENSION_BASSE_DV    = 118;   // 11,8 V : batterie faible
 const int16_t  SEUIL_MOTEUR_TOURNE_DV    = 132;   // au-dessus, l'alternateur charge : le moteur tourne
@@ -169,23 +171,59 @@ void lireSondes() {
   sondes.requestTemperatures();
 }
 
-// Moyenne de 16 lectures pour lisser les parasites de l'allumage
-uint16_t lireAnalogiqueMoyen(uint8_t pin) {
+// Somme de 16 lectures pour lisser les parasites de l'allumage (la première, après un changement d'entrée, est ignorée)
+uint16_t lireAnalogiqueSomme(uint8_t pin) {
+  analogRead(pin);
   uint16_t somme = 0;
   for (uint8_t i = 0; i < 16; i++) somme += analogRead(pin);
-  return somme / 16;
+  return somme;
+}
+
+#if OPTION_TENSION
+// Somme de 16 lectures de la référence interne de 1,1 V, mesurée par rapport au 5 V
+uint16_t lireReferenceInterneSomme() {
+  ADMUX = _BV(REFS0) | 0x0E;   // référence AVcc, entrée = référence interne 1,1 V
+  delay(2);                    // stabilisation de la référence interne
+  uint16_t somme = 0;
+  for (uint8_t i = 0; i < 17; i++) {
+    ADCSRA |= _BV(ADSC);
+    while (ADCSRA & _BV(ADSC));
+    if (i > 0) somme += ADC;   // première conversion ignorée
+  }
+  return somme;
+}
+#endif
+
+// Médiane de trois valeurs : élimine un pic isolé sans retarder les vraies variations
+int16_t mediane3(int16_t a, int16_t b, int16_t c) {
+  if (a > b) {
+    int16_t t = a;
+    a = b;
+    b = t;
+  }
+  if (b > c) b = c;
+  return a > b ? a : b;
 }
 
 void lireTension() {
 #if OPTION_TENSION
-  uint32_t mv = (uint32_t)lireAnalogiqueMoyen(PIN_TENSION) * TENSION_PLEINE_ECHELLE_MV / 1023;
-  tensionDV = (int16_t)((mv + 50) / 100);
+  int16_t mesure = VALEUR_INVALIDE;
+  uint16_t reference = lireReferenceInterneSomme();
+  if (reference >= 1000) {     // sinon lecture aberrante
+    uint32_t mv = (uint32_t)lireAnalogiqueSomme(PIN_TENSION) * CONSTANTE_TENSION_MV / reference;
+    mesure = (int16_t)((mv + 50) / 100);
+  }
+  static int16_t precedente1 = VALEUR_INVALIDE, precedente2 = VALEUR_INVALIDE;
+  if (precedente1 == VALEUR_INVALIDE) precedente1 = precedente2 = mesure;   // première mesure
+  tensionDV = mediane3(mesure, precedente1, precedente2);
+  precedente2 = precedente1;
+  precedente1 = mesure;
 #endif
 }
 
 void lirePression() {
 #if OPTION_PRESSION_HUILE
-  int16_t brut = lireAnalogiqueMoyen(PIN_PRESSION);   // 0,5 V = 102, 4,5 V = 921
+  int16_t brut = lireAnalogiqueSomme(PIN_PRESSION) / 16;   // 0,5 V = 102, 4,5 V = 921 (capteur proportionnel au 5 V)
   if (brut < 51 || brut > 972) {                       // hors 0,25-4,75 V : débranché ou en court-circuit
     pressionDix = VALEUR_INVALIDE;
     return;
@@ -228,13 +266,13 @@ void mettreAJourAlertes() {
 }
 
 // ============================================================ affichage
-// Mode "page" de U8g2 : tampon de 256 octets au lieu de 1 Ko 
+// Mode "page" de U8g2 : tampon de 256 octets au lieu de 1 Ko (l'ATmega328P n'a que 2 Ko de RAM).
 // Le dessin est rejoué pour chaque bande de l'écran dans la boucle firstPage() / nextPage().
 
 void afficherImage(const uint8_t *image) {
   ecran.firstPage();
   do {
-    ecran.drawBitmap(0, 0, 16, 64, image);
+    ecran.drawXBMP(0, 0, 128, 64, image);
   } while (ecran.nextPage());
 }
 
@@ -298,7 +336,19 @@ void dessinerV(u8g2_uint_t x, u8g2_uint_t y) {
   }
 }
 
+// Heure "HH:MM". Les deux-points clignotent : une demi-seconde sur deux, ils sont dessinés en noir (invisibles),
+// ce qui laisse les minutes exactement à la même place
+void dessinerHeure(u8g2_uint_t x, u8g2_uint_t y, const char *texteHeure, bool deuxPoints) {
+  char heures[3] = { texteHeure[0], texteHeure[1], '\0' };
+  x += ecran.drawStr(x, y, heures);
+  if (!deuxPoints) ecran.setDrawColor(0);
+  x += ecran.drawStr(x, y, ":");
+  ecran.setDrawColor(1);
+  ecran.drawStr(x, y, texteHeure + 3);
+}
+
 void dessinerEcranPrincipal(bool phase, const char *texteHeure) {
+  bool deuxPoints = phase || heureLocale == 0;   // fixes si l'heure est inconnue
   char texte[6];
 
   // Ligne 1 : moteur (et pression d'huile en option), la zone en alerte s'inverse et clignote
@@ -325,7 +375,7 @@ void dessinerEcranPrincipal(bool phase, const char *texteHeure) {
     ecran.drawBox(0, 0, 128, 27);
     ecran.setDrawColor(0);
   }
-  ecran.drawBitmap(0, 2, 5, 23, bmp_moteur);
+  ecran.drawXBMP(0, 2, 40, 23, bmp_moteur);
   dessinerAvecDegre(52, 25, texte, 22, 3);
   ecran.setDrawColor(1);
 #endif
@@ -342,7 +392,7 @@ void dessinerEcranPrincipal(bool phase, const char *texteHeure) {
   // Ligne 3 : heure, et tension batterie à droite si elle est mesurée
   ecran.setFont(u8g2_font_logisoso16_tn);
 #if OPTION_TENSION
-  ecran.drawStr(1, 64, texteHeure);
+  dessinerHeure(1, 64, texteHeure, deuxPoints);
   texteDixiemes(texte, tensionDV);
   u8g2_uint_t l = ecran.getStrWidth(texte);
   x = 126 - (l + 2 + 10);
@@ -354,7 +404,7 @@ void dessinerEcranPrincipal(bool phase, const char *texteHeure) {
   dessinerV(x + l + 2, 64);
   ecran.setDrawColor(1);
 #else
-  centrer(texteHeure, 64);
+  dessinerHeure((128 - ecran.getStrWidth(texteHeure)) / 2, 64, texteHeure, deuxPoints);
 #endif
 }
 
@@ -467,6 +517,21 @@ void journalSerie() {
   Serial.println();
 }
 
+// Indique au démarrage quels modules I2C répondent (aide au câblage)
+void verifierI2C() {
+  const uint8_t adresses[] = { 0x3C, RTC_ADRESSE };
+  for (uint8_t i = 0; i < 2; i++) {
+    Wire.beginTransmission(adresses[i]);
+    bool present = (Wire.endTransmission() == 0);
+    Serial.print(i == 0 ? F("Ecran (0x3C) : ") : F("Horloge (0x68) : "));
+    Serial.println(present ? F("OK") : F("ne repond pas"));
+  }
+  if (Wire.getWireTimeoutFlag()) {
+    Wire.clearWireTimeoutFlag();
+    Serial.println(F("! Bus I2C bloque : verifier SDA/SCL, VCC/GND et les soudures"));
+  }
+}
+
 void listerSondes() {
   uint8_t n = sondes.getDeviceCount();
   Serial.print(n);
@@ -499,9 +564,13 @@ void setup() {
   pinMode(PIN_BOUTON_HEURES, INPUT_PULLUP);
   pinMode(PIN_BOUTON_MINUTES, INPUT_PULLUP);
 
+  // Timeout I2C activé avant l'écran : un module mal câblé ne doit pas figer la Nano au démarrage
+  Wire.begin();
+  Wire.setWireTimeout(25000, true);
+  verifierI2C();
+
   ecran.setBusClock(100000);          // 100 kHz : plus robuste avec des fils longs, compatible DS1307
   ecran.begin();
-  Wire.setWireTimeout(25000, true);   // évite un blocage du bus I2C après une perturbation
 
   afficherImage(bmp_splash);
 
@@ -547,7 +616,7 @@ void loop() {
   bool phase = (maintenant / PERIODE_CLIGNOT_MS) % 2;
   if (phase != phasePrecedente) {
     phasePrecedente = phase;
-    if (alerteMoteur() || alerteTensionActive || alertePressionActive) aRedessiner = true;
+    aRedessiner = true;   // deux-points de l'heure et alertes clignotantes
   }
 
   if (boutonDeclenche(boutonHeures, maintenant))  ajusterHeure(0, 1);

@@ -37,7 +37,7 @@ Version 1.0 (DS1307, no buttons) is available in the [`1.0`](https://github.com/
 
 <table>
   <tr>
-    <td><img src="https://github.com/user-attachments/assets/140ef6bf-781a-4ecd-82fb-425c16a6cc0e" width="400"></td>
+    <td><img src="https://github.com/user-attachments/assets/0ae20f5b-7b02-4807-b319-06b49eaad19c" width="400"></td>
     <td><img src="https://github.com/user-attachments/assets/658767af-6571-4778-9c2d-8420577c02db" width="300"></td>
   </tr>
 </table>
